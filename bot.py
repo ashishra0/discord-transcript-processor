@@ -11,7 +11,7 @@ load_dotenv()
 DISCORD_BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 WATCH_CHANNEL_ID = int(os.environ["WATCH_CHANNEL_ID"])
-OUTPUT_CHANNEL_ID = int(os.environ.get("OUTPUT_CHANNEL_ID", "0")) or WATCH_CHANNEL_ID
+OUTPUT_CHANNEL_ID = int(os.environ.get("OUTPUT_CHANNEL_ID") or 0) or WATCH_CHANNEL_ID
 TRANSCRIPT_BOT_ID = os.environ.get("TRANSCRIPT_BOT_ID")
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
 MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "4096"))
