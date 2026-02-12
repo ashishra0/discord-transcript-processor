@@ -26,10 +26,25 @@ intents = discord.Intents(messages=True, message_content=True, guilds=True)
 client = discord.Client(intents=intents)
 claude = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-# State machine per channel
+# State machine per thread/channel
 # Phase: "mcq" -> waiting for MCQ answers
 #         "feynman" -> waiting for Feynman explanation
 sessions: dict[int, dict] = {}
+
+
+def get_formatted_transcript(message: discord.Message) -> str | None:
+    """Extract the formatted-transcript-*.txt attachment if present."""
+    for attachment in message.attachments:
+        if attachment.filename.startswith("formatted-transcript-") and attachment.filename.endswith(".txt"):
+            return attachment
+    return None
+
+
+def is_in_watched_thread(message: discord.Message) -> bool:
+    """Check if message is in a thread whose parent is the watched channel."""
+    if not isinstance(message.channel, discord.Thread):
+        return False
+    return message.channel.parent_id == WATCH_CHANNEL_ID
 
 
 async def call_claude(system: str, user_content: str) -> str:
@@ -60,21 +75,8 @@ async def send_long_message(channel, text: str, reference=None):
         await channel.send(chunk, reference=ref)
 
 
-def is_transcript(message: discord.Message) -> bool:
-    """Check if this message is a transcript from the watched bot."""
-    if message.channel.id != WATCH_CHANNEL_ID:
-        return False
-    if message.author.id == client.user.id:
-        return False
-    if TRANSCRIPT_BOT_ID and str(message.author.id) != TRANSCRIPT_BOT_ID:
-        return False
-    if len(message.content) < 100 and not message.attachments:
-        return False
-    return True
-
-
 def is_user_reply(message: discord.Message) -> bool:
-    """Check if this is a non-bot reply in a channel with an active session."""
+    """Check if this is a non-bot reply in a channel/thread with an active session."""
     if message.author.bot:
         return False
     return message.channel.id in sessions
@@ -90,7 +92,7 @@ def looks_like_mcq_answer(text: str) -> bool:
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user} (ID: {client.user.id})")
-    print(f"Watching channel: {WATCH_CHANNEL_ID}")
+    print(f"Watching channel: {WATCH_CHANNEL_ID} (threads)")
     print(f"Output channel:   {OUTPUT_CHANNEL_ID}")
     print(f"Model:            {CLAUDE_MODEL}")
     if TRANSCRIPT_BOT_ID:
@@ -100,28 +102,38 @@ async def on_ready():
 @client.event
 async def on_message(message: discord.Message):
 
-    # --- New transcript arrives → Start MCQ phase ---
-    if is_transcript(message):
-        transcript = message.content
-        for attachment in message.attachments:
-            if attachment.filename.endswith((".md", ".txt")):
-                file_bytes = await attachment.read()
-                transcript += "\n\n" + file_bytes.decode("utf-8", errors="replace")
+    # --- New transcript arrives in a thread → Start MCQ phase ---
+    if is_in_watched_thread(message) and message.author.bot:
+        # Filter to specific bot if configured
+        if TRANSCRIPT_BOT_ID and str(message.author.id) != TRANSCRIPT_BOT_ID:
+            return
 
-        print(f"Transcript received ({len(transcript)} chars) from {message.author}")
-        output_channel = client.get_channel(OUTPUT_CHANNEL_ID) or message.channel
+        attachment = get_formatted_transcript(message)
+        if not attachment:
+            return
 
-        async with output_channel.typing():
+        # Download the formatted transcript file
+        file_bytes = await attachment.read()
+        transcript = file_bytes.decode("utf-8", errors="replace")
+
+        if len(transcript.strip()) < 50:
+            return
+
+        thread = message.channel
+        print(f"Transcript received ({len(transcript)} chars) from thread '{thread.name}'")
+
+        # Post quiz in the same thread
+        async with thread.typing():
             try:
                 questions = await call_claude(QUIZ_PROMPT, transcript)
             except Exception as e:
-                await output_channel.send(f"**Error generating quiz:** {e}")
+                await thread.send(f"**Error generating quiz:** {e}")
                 return
 
         header = "**Reading Quiz** — answer with your choices, e.g. `1A 2C 3B 4D 5A`\n\n"
-        await send_long_message(output_channel, header + questions, reference=message)
+        await send_long_message(thread, header + questions, reference=message)
 
-        sessions[output_channel.id] = {
+        sessions[thread.id] = {
             "phase": "mcq",
             "transcript": transcript,
             "questions": questions,
@@ -172,7 +184,6 @@ async def on_message(message: discord.Message):
 
     # --- Feynman phase: evaluate the user's explanation ---
     if session["phase"] == "feynman":
-        # Any non-trivial message counts as their explanation
         if len(message.content.strip()) < 20:
             await message.channel.send("Give it a real shot — try to explain the concept in a few sentences at least.")
             return
