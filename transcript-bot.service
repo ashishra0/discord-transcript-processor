@@ -1,0 +1,15 @@
+[Unit]
+Description=Discord Transcript Processor Bot
+After=network.target
+
+[Service]
+Type=simple
+User=ashish
+WorkingDirectory=/home/ashish/discord-transcript-processor
+ExecStart=/home/ashish/discord-transcript-processor/.venv/bin/python bot.py
+Restart=on-failure
+RestartSec=10
+EnvironmentFile=/home/ashish/discord-transcript-processor/.env
+
+[Install]
+WantedBy=multi-user.target
